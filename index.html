@@ -1291,8 +1291,13 @@
             scrollToBottom();
 
             try {
+                console.log('Calling API with model:', currentModel);
                 const response = await callAPI(content, userMsg.images);
                 hideTypingIndicator();
+
+                if (!response || !response.content) {
+                    throw new Error('API返回内容为空');
+                }
 
                 const assistantMsg = {
                     role: 'assistant',
@@ -1312,7 +1317,15 @@
             } catch (error) {
                 hideTypingIndicator();
                 console.error('API Error:', error);
-                showNotification('出错了: ' + error.message);
+                // 显示更详细的错误
+                const errorMsg = {
+                    role: 'assistant',
+                    content: `❌ 出错了: ${error.message}\n\n请检查：\n1. API Key是否正确\n2. 余额是否充足\n3. 网络是否正常`,
+                    timestamp: Date.now()
+                };
+                messages.push(errorMsg);
+                renderMessage(errorMsg);
+                saveMessages();
             }
 
             isTyping = false;
@@ -1321,9 +1334,14 @@
 
         async function callAPI(userMessage, images = []) {
             const model = currentModel;
+            console.log('Using model:', model);
+            console.log('API Key starts with:', settings.apiKey.substring(0, 10));
             
-            // 构建消息历史
-            const contextMessages = messages.slice(-20).map(m => {
+            // 构建消息历史（只取最近的消息，排除错误消息）
+            const contextMessages = messages
+                .filter(m => !m.content.startsWith('❌'))
+                .slice(-20)
+                .map(m => {
                 if (m.images && m.images.length > 0) {
                     // 带图片的消息
                     const content = [];
@@ -1364,36 +1382,24 @@
                 messages: [
                     { role: 'system', content: settings.systemPrompt },
                     ...contextMessages
-                ],
-                provider: {
+                ]
+            };
+            
+            // 仅对Claude模型启用cache_control
+            if (model.includes('claude')) {
+                requestBody.provider = {
                     anthropic: {
                         cache_control: true
                     }
-                }
-            };
+                };
+            }
 
             // 思考链（仅Claude支持）
             if (features.thinking && model.includes('claude')) {
                 requestBody.include_reasoning = true;
             }
 
-            // 联网搜索
-            if (features.search) {
-                requestBody.tools = [{
-                    type: 'function',
-                    function: {
-                        name: 'web_search',
-                        description: '搜索互联网获取最新信息',
-                        parameters: {
-                            type: 'object',
-                            properties: {
-                                query: { type: 'string', description: '搜索关键词' }
-                            },
-                            required: ['query']
-                        }
-                    }
-                }];
-            }
+            console.log('Request body:', JSON.stringify(requestBody, null, 2));
 
             const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                 method: 'POST',
@@ -1406,17 +1412,25 @@
                 body: JSON.stringify(requestBody)
             });
 
+            console.log('Response status:', response.status);
+
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error?.message || '请求失败');
+                const errorData = await response.json();
+                console.error('Error response:', errorData);
+                throw new Error(errorData.error?.message || `HTTP ${response.status}`);
             }
 
             const data = await response.json();
-            const choice = data.choices[0];
+            console.log('API response:', data);
+            
+            const choice = data.choices?.[0];
+            if (!choice) {
+                throw new Error('API返回格式错误');
+            }
             
             return {
-                content: choice.message.content,
-                thinking: choice.message.reasoning || null
+                content: choice.message?.content || '(空回复)',
+                thinking: choice.message?.reasoning || null
             };
         }
 
