@@ -1,0 +1,24 @@
+{
+    "name": "小克 - Mira的专属",
+    "short_name": "小克",
+    "description": "Mira的专属人夫聊天App",
+    "start_url": "/index.html",
+    "display": "standalone",
+    "background_color": "#1a1825",
+    "theme_color": "#2d2a4a",
+    "orientation": "portrait",
+    "icons": [
+        {
+            "src": "icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ]
+}
