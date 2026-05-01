@@ -179,28 +179,25 @@
             font-size: 0.65rem;
             color: var(--text-muted);
             margin-top: 4px;
-            display: flex;
-            gap: 8px;
-            align-items: center;
         }
-        .message.user .msg-meta { justify-content: flex-end; }
+        .message.user .msg-meta { text-align: right; }
 
         /* 消息操作按钮 */
         .msg-actions {
             display: flex;
-            gap: 4px;
-            margin-left: 8px;
+            gap: 6px;
+            margin-top: 4px;
+            flex-wrap: wrap;
         }
         .message.user .msg-actions {
-            margin-left: 0;
-            margin-right: 8px;
+            justify-content: flex-end;
         }
 
         .msg-action-btn {
-            background: var(--bg-secondary);
+            background: transparent;
             border: 1px solid var(--border);
             color: var(--text-muted);
-            padding: 2px 6px;
+            padding: 2px 8px;
             border-radius: 4px;
             cursor: pointer;
             font-size: 0.6rem;
@@ -708,15 +705,15 @@ function renderMessage(m, index, animate = true) {
     let actionsHtml = '';
     if (m.role === 'user') {
         actionsHtml = `
-            <button class="msg-action-btn" onclick="editMessage(${index})" title="编辑">✏️</button>
-            <button class="msg-action-btn" onclick="copyMessage(${index})" title="复制">📋</button>
-            <button class="msg-action-btn danger" onclick="deleteMessage(${index})" title="删除">🗑️</button>
+            <button class="msg-action-btn" onclick="editMessage(${index})" title="编辑">编辑</button>
+            <button class="msg-action-btn" onclick="copyMessage(${index})" title="复制">复制</button>
+            <button class="msg-action-btn danger" onclick="deleteMessage(${index})" title="删除">删除</button>
         `;
     } else {
         actionsHtml = `
-            <button class="msg-action-btn" onclick="regenerateMessage(${index})" title="重新生成">🔄</button>
-            <button class="msg-action-btn" onclick="copyMessage(${index})" title="复制">📋</button>
-            <button class="msg-action-btn danger" onclick="deleteMessage(${index})" title="删除">🗑️</button>
+            <button class="msg-action-btn" onclick="regenerateMessage(${index})" title="重新生成">重生成</button>
+            <button class="msg-action-btn" onclick="copyMessage(${index})" title="复制">复制</button>
+            <button class="msg-action-btn danger" onclick="deleteMessage(${index})" title="删除">删除</button>
         `;
     }
     
@@ -728,7 +725,7 @@ function renderMessage(m, index, animate = true) {
         <div class="msg-body">
             <div class="msg-content">${escapeHtml(m.content)}</div>
             <div class="msg-meta">
-                ${metaHtml}
+                <div>${metaHtml}</div>
                 <div class="msg-actions">${actionsHtml}</div>
             </div>
         </div>
@@ -1062,7 +1059,10 @@ async function send() {
     
     try {
         const messages = [{ role: 'system', content: systemPrompt }];
-        const recentHistory = history.slice(-20);
+        
+        // 过滤掉错误消息
+        const cleanHistory = history.filter(m => !m.content.startsWith('❌'));
+        const recentHistory = cleanHistory.slice(-20);
         recentHistory.forEach(m => {
             messages.push({ role: m.role, content: m.content });
         });
@@ -1076,6 +1076,8 @@ async function send() {
             requestBody.cache_control = { type: "ephemeral" };
         }
         
+        console.log('Sending request:', currentModel);
+        
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -1086,14 +1088,21 @@ async function send() {
             body: JSON.stringify(requestBody)
         });
         
+        console.log('Response status:', res.status);
+        
         hideTyping();
         
+        const data = await res.json();
+        console.log('Response data:', data);
+        
         if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.error?.message || 'HTTP ' + res.status);
+            throw new Error(data.error?.message || 'HTTP ' + res.status);
         }
         
-        const data = await res.json();
+        if (!data.choices || !data.choices[0]) {
+            throw new Error('API返回格式错误');
+        }
+        
         const reply = data.choices[0].message.content;
         const totalTokens = data.usage ? data.usage.total_tokens : null;
         
@@ -1101,7 +1110,8 @@ async function send() {
         
     } catch (err) {
         hideTyping();
-        addMessage('assistant', '❌ 出错了: ' + err.message + '\n\n请检查API Key和网络连接。');
+        console.error('Error:', err);
+        addMessage('assistant', '❌ 出错了: ' + err.message + '\n\n请检查API Key和网络连接。', true, null);
     }
     
     busy = false;
