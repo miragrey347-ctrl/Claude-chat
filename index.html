@@ -812,10 +812,6 @@ async function regenerateMessage(index) {
             messages: messages
         };
         
-        if (currentModel.includes('claude')) {
-            requestBody.cache_control = { type: "ephemeral" };
-        }
-        
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -896,10 +892,6 @@ async function confirmEdit() {
                     model: currentModel,
                     messages: messages
                 };
-                
-                if (currentModel.includes('claude')) {
-                    requestBody.cache_control = { type: "ephemeral" };
-                }
                 
                 const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                     method: 'POST',
@@ -1072,9 +1064,7 @@ async function send() {
             messages: messages
         };
         
-        if (currentModel.includes('claude')) {
-            requestBody.cache_control = { type: "ephemeral" };
-        }
+        // 暂时去掉cache_control，先确保能正常工作
         
         console.log('Sending request:', currentModel);
         
