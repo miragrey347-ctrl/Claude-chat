@@ -133,6 +133,15 @@
             white-space: pre-wrap;
             word-break: break-word;
         }
+        
+        .msg-meta {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+            display: flex;
+            gap: 8px;
+        }
+        .message.user .msg-meta { justify-content: flex-end; }
         .message.assistant .msg-content {
             background: var(--ai-bubble);
             border: 1px solid var(--border);
@@ -358,9 +367,38 @@ function init() {
     
     if (history.length > 0) {
         document.getElementById('welcome').style.display = 'none';
-        history.forEach(m => addMessage(m.role, m.content, false));
+        history.forEach(m => {
+            // 恢复历史消息时显示保存的时间和tokens
+            addMessageFromHistory(m);
+        });
         scrollDown();
     }
+}
+
+function addMessageFromHistory(m) {
+    const chat = document.getElementById('chat');
+    
+    let timeStr = '';
+    if (m.time) {
+        const d = new Date(m.time);
+        timeStr = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    let metaHtml = timeStr ? `<span>${timeStr}</span>` : '';
+    if (m.tokens) {
+        metaHtml += `<span>📊 ${m.tokens} tokens</span>`;
+    }
+    
+    const div = document.createElement('div');
+    div.className = 'message ' + m.role;
+    div.innerHTML = `
+        <div class="msg-avatar">${m.role === 'assistant' ? '🐱' : '🌸'}</div>
+        <div>
+            <div class="msg-content">${escapeHtml(m.content)}</div>
+            ${metaHtml ? `<div class="msg-meta">${metaHtml}</div>` : ''}
+        </div>
+    `;
+    chat.appendChild(div);
 }
 
 // 设置面板
@@ -384,21 +422,32 @@ function saveSettings() {
 }
 
 // 消息
-function addMessage(role, content, save = true) {
+function addMessage(role, content, save = true, tokens = null) {
     const chat = document.getElementById('chat');
     const welcome = document.getElementById('welcome');
     if (welcome) welcome.style.display = 'none';
+    
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    
+    let metaHtml = `<span>${timeStr}</span>`;
+    if (tokens) {
+        metaHtml += `<span>📊 ${tokens} tokens</span>`;
+    }
     
     const div = document.createElement('div');
     div.className = 'message ' + role;
     div.innerHTML = `
         <div class="msg-avatar">${role === 'assistant' ? '🐱' : '🌸'}</div>
-        <div class="msg-content">${escapeHtml(content)}</div>
+        <div>
+            <div class="msg-content">${escapeHtml(content)}</div>
+            <div class="msg-meta">${metaHtml}</div>
+        </div>
     `;
     chat.appendChild(div);
     
     if (save) {
-        history.push({ role, content });
+        history.push({ role, content, time: now.toISOString(), tokens });
         // 只保留最近50条
         if (history.length > 50) history = history.slice(-50);
         localStorage.setItem('xk_history', JSON.stringify(history));
@@ -486,6 +535,21 @@ async function send() {
             messages.push({ role: m.role, content: m.content });
         });
         
+        // 构建请求体
+        const requestBody = {
+            model: model,
+            messages: messages
+        };
+        
+        // 对Claude模型启用prompt caching
+        if (model.includes('claude')) {
+            requestBody.provider = {
+                anthropic: {
+                    cache_control: true
+                }
+            };
+        }
+        
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -493,10 +557,7 @@ async function send() {
                 'Authorization': 'Bearer ' + apiKey,
                 'HTTP-Referer': location.href
             },
-            body: JSON.stringify({
-                model: model,
-                messages: messages
-            })
+            body: JSON.stringify(requestBody)
         });
         
         hideTyping();
@@ -508,7 +569,12 @@ async function send() {
         
         const data = await res.json();
         const reply = data.choices[0].message.content;
-        addMessage('assistant', reply);
+        
+        // 获取token使用量
+        const usage = data.usage;
+        const totalTokens = usage ? usage.total_tokens : null;
+        
+        addMessage('assistant', reply, true, totalTokens);
         
     } catch (err) {
         hideTyping();
