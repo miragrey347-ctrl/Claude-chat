@@ -381,7 +381,7 @@ function addMessageFromHistory(m) {
     let timeStr = '';
     if (m.time) {
         const d = new Date(m.time);
-        timeStr = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        timeStr = formatDateTime(d);
     }
     
     let metaHtml = timeStr ? `<span>${timeStr}</span>` : '';
@@ -428,7 +428,7 @@ function addMessage(role, content, save = true, tokens = null) {
     if (welcome) welcome.style.display = 'none';
     
     const now = new Date();
-    const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const timeStr = formatDateTime(now);
     
     let metaHtml = `<span>${timeStr}</span>`;
     if (tokens) {
@@ -452,6 +452,15 @@ function addMessage(role, content, save = true, tokens = null) {
         if (history.length > 50) history = history.slice(-50);
         localStorage.setItem('xk_history', JSON.stringify(history));
     }
+}
+
+function formatDateTime(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    const h = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    return `${y}-${m}-${d} ${h}:${min}`;
 }
 
 function escapeHtml(text) {
@@ -541,13 +550,9 @@ async function send() {
             messages: messages
         };
         
-        // 对Claude模型启用prompt caching
+        // 对Claude模型启用自动prompt caching
         if (model.includes('claude')) {
-            requestBody.provider = {
-                anthropic: {
-                    cache_control: true
-                }
-            };
+            requestBody.cache_control = { type: "ephemeral" };
         }
         
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
