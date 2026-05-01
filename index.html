@@ -137,8 +137,7 @@
         .message {
             display: flex;
             gap: 8px;
-            max-width: 85%;
-            position: relative;
+            max-width: 80%;
         }
         .message.user { align-self: flex-end; flex-direction: row-reverse; }
 
@@ -155,7 +154,9 @@
         .message.assistant .msg-avatar { background: linear-gradient(135deg, var(--accent), #9c89b8); }
         .message.user .msg-avatar { background: linear-gradient(135deg, #9ccfd8, #7fb8c9); }
 
-        .msg-body { flex: 1; }
+        .msg-body { 
+            display: inline-block;
+        }
 
         .msg-content {
             padding: 10px 14px;
@@ -164,6 +165,7 @@
             font-size: 0.9rem;
             white-space: pre-wrap;
             word-break: break-word;
+            display: inline-block;
         }
         .message.assistant .msg-content {
             background: var(--ai-bubble);
