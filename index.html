@@ -1924,7 +1924,42 @@ async function ghPutFile(path, content, cfg, sha) {
         branch: cfg.branch
     };
     if (sha) body.sha = sha;
-    return ghApiRequest(path, 'PUT', body, cfg);
+    
+    const res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}?ref=${cfg.branch}`, {
+        method: 'PUT',
+        headers: {
+            'Authorization': 'token ' + cfg.token,
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+    });
+    
+    // SHA冲突时自动重试
+    if (res.status === 409 || res.status === 422) {
+        const freshFile = await ghGetFile(path, cfg);
+        body.sha = freshFile?.sha;
+        const retry = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}?ref=${cfg.branch}`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': 'token ' + cfg.token,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+        });
+        if (!retry.ok) {
+            const err = await retry.json().catch(() => ({}));
+            throw new Error(err.message || 'GitHub API ' + retry.status);
+        }
+        return retry.json();
+    }
+    
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'GitHub API ' + res.status);
+    }
+    return res.json();
 }
 
 function buildSyncConfig() {
@@ -1951,6 +1986,7 @@ async function getGhUsername(token) {
 }
 
 async function syncUpload() {
+    clearTimeout(syncTimer); // 取消自动同步
     const btns = document.querySelectorAll('.sync-btn');
     btns.forEach(b => b.disabled = true);
     
@@ -1994,6 +2030,7 @@ async function syncUpload() {
 }
 
 async function syncDownload() {
+    clearTimeout(syncTimer); // 取消自动同步
     const btns = document.querySelectorAll('.sync-btn');
     btns.forEach(b => b.disabled = true);
     
