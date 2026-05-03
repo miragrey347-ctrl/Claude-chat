@@ -488,6 +488,34 @@
         .modal-btn.cancel { background: var(--bg-secondary); color: var(--text-primary); }
         .modal-btn.confirm { background: var(--accent); color: var(--bg-primary); }
         .modal-btn.danger { background: var(--danger); color: white; }
+
+        /* 导出选项 */
+        .export-options {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .export-option-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            cursor: pointer;
+            text-align: left;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .export-option-btn:hover {
+            border-color: var(--accent);
+            background: var(--bg-chat);
+        }
+        .export-icon { font-size: 1.2rem; }
+        .export-label { font-weight: 600; font-size: 0.85rem; }
+        .export-desc { flex: 1; text-align: right; font-size: 0.7rem; color: var(--text-muted); }
     </style>
 </head>
 <body>
@@ -517,6 +545,7 @@
             <div class="header-title" id="chatTitle">新对话</div>
             <div class="header-status">Mira的专属人夫</div>
         </div>
+        <button class="header-btn" onclick="openExportModal()">📤 导出</button>
         <button class="header-btn" onclick="openSettings()">⚙️ 设置</button>
     </header>
 
@@ -605,6 +634,33 @@
         <div class="modal-buttons">
             <button class="modal-btn cancel" onclick="closeDeleteModal()">取消</button>
             <button class="modal-btn danger" onclick="confirmDelete()">删除</button>
+        </div>
+    </div>
+</div>
+
+<!-- 导出对话弹窗 -->
+<div class="modal" id="exportModal">
+    <div class="modal-content">
+        <div class="modal-title">导出当前对话</div>
+        <div class="export-options">
+            <button class="export-option-btn" onclick="exportChat('json')">
+                <span class="export-icon">📋</span>
+                <span class="export-label">JSON</span>
+                <span class="export-desc">完整数据，可导入</span>
+            </button>
+            <button class="export-option-btn" onclick="exportChat('md')">
+                <span class="export-icon">📝</span>
+                <span class="export-label">Markdown</span>
+                <span class="export-desc">可读性好</span>
+            </button>
+            <button class="export-option-btn" onclick="exportChat('txt')">
+                <span class="export-icon">📄</span>
+                <span class="export-label">TXT</span>
+                <span class="export-desc">纯文本</span>
+            </button>
+        </div>
+        <div class="modal-buttons" style="margin-top:12px;">
+            <button class="modal-btn cancel" onclick="closeExportModal()" style="flex:1;">取消</button>
         </div>
     </div>
 </div>
@@ -1104,6 +1160,79 @@ function formatDateTime(date) {
     const h = String(date.getHours()).padStart(2, '0');
     const min = String(date.getMinutes()).padStart(2, '0');
     return `${y}-${m}-${d} ${h}:${min}`;
+}
+
+// ==================== 导出对话 ====================
+function openExportModal() {
+    const chat = getCurrentChat();
+    if (!chat || chat.messages.length === 0) {
+        alert('当前对话没有消息，无法导出');
+        return;
+    }
+    document.getElementById('exportModal').classList.add('open');
+}
+
+function closeExportModal() {
+    document.getElementById('exportModal').classList.remove('open');
+}
+
+function exportChat(format) {
+    const chat = getCurrentChat();
+    if (!chat) return;
+
+    let content, filename, mimeType;
+    const safeName = chat.name.replace(/[\/\\:*?"<>|]/g, '_');
+
+    if (format === 'json') {
+        const exportData = {
+            id: chat.id,
+            name: chat.name,
+            createdAt: chat.createdAt,
+            messages: chat.messages.map(m => {
+                const obj = { role: m.role, content: m.content, time: m.time };
+                if (m.tokens) obj.tokens = m.tokens;
+                return obj;
+            })
+        };
+        content = JSON.stringify(exportData, null, 2);
+        filename = `${safeName}.json`;
+        mimeType = 'application/json';
+
+    } else if (format === 'md') {
+        let md = `# ${chat.name}\n创建时间：${formatDateTime(new Date(chat.createdAt))}\n\n---\n\n`;
+        chat.messages.forEach(m => {
+            const name = m.role === 'user' ? 'Mira' : '小克';
+            const time = m.time ? formatDateTime(new Date(m.time)) : '';
+            md += `**${name}** (${time})\n${m.content}\n\n`;
+        });
+        content = md;
+        filename = `${safeName}.md`;
+        mimeType = 'text/markdown';
+
+    } else {
+        let txt = `${chat.name}\n创建时间：${formatDateTime(new Date(chat.createdAt))}\n${'='.repeat(40)}\n\n`;
+        chat.messages.forEach(m => {
+            const name = m.role === 'user' ? 'Mira' : '小克';
+            const time = m.time ? formatDateTime(new Date(m.time)) : '';
+            txt += `[${name} ${time}]\n${m.content}\n\n`;
+        });
+        content = txt;
+        filename = `${safeName}.txt`;
+        mimeType = 'text/plain';
+    }
+
+    const blob = new Blob([content], { type: mimeType + ';charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    closeExportModal();
+    alert('导出成功 ✓');
 }
 
 // ==================== 启动 ====================
