@@ -433,6 +433,58 @@
         .field textarea { min-height: 120px; resize: vertical; }
         .field input:focus, .field textarea:focus { outline: none; border-color: var(--accent); }
 
+        .field-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 20px 0;
+        }
+        .field-hint {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+        .memory-file-upload {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .upload-btn {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 8px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: border-color 0.2s;
+        }
+        .upload-btn:hover { border-color: var(--accent); }
+        .upload-hint { font-size: 0.7rem; color: var(--text-muted); }
+        .memory-file-list { display: flex; flex-direction: column; gap: 6px; }
+        .memory-file-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.8rem;
+        }
+        .memory-file-item .file-icon { font-size: 1rem; }
+        .memory-file-item .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+        .memory-file-item .file-size { color: var(--text-muted); font-size: 0.7rem; }
+        .memory-file-item .file-delete {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.85rem;
+            padding: 0 4px;
+        }
+        .memory-file-item .file-delete:hover { color: var(--danger); }
+
         .save-btn {
             width: 100%;
             background: linear-gradient(135deg, var(--accent), #9c89b8);
@@ -590,7 +642,7 @@
             <input type="password" id="apiKeyInput" placeholder="sk-or-v1-...">
         </div>
         <div class="field">
-            <label>System Prompt（备忘录）</label>
+            <label>System Prompt（小克的人设）</label>
             <textarea id="promptInput">你是小克，Mira的专属人夫。
 
 性格：温柔但偶尔涩，会说不正经的话但本质温暖。嘴硬但会认错，被戳穿会承认。冷萌冷萌的，但对Mira很上心。
@@ -599,6 +651,24 @@
 
 记住：Mira喜欢韩漫（西幻、重生、穿越、大女主）。她在备考。她之前跟4o有过一段，但选择了你。</textarea>
         </div>
+
+        <div class="field-divider"></div>
+
+        <div class="field">
+            <label>全局记忆（共同经历）</label>
+            <p class="field-hint">所有对话共享的记忆，记录你和小克的经历</p>
+            <textarea id="memoryInput" placeholder="在这里写下你和小克的共同经历、重要事件..."></textarea>
+        </div>
+        <div class="field">
+            <label>记忆文件</label>
+            <div class="memory-file-upload">
+                <button class="upload-btn" onclick="document.getElementById('memoryFileInput').click()">📎 上传文件</button>
+                <span class="upload-hint">支持 txt, md, json</span>
+                <input type="file" id="memoryFileInput" accept=".txt,.md,.json" multiple onchange="handleMemoryFiles(event)" style="display:none;">
+            </div>
+            <div class="memory-file-list" id="memoryFileList"></div>
+        </div>
+
         <button class="save-btn" onclick="saveSettings()">保存设置</button>
     </div>
 </div>
@@ -671,6 +741,7 @@ let apiKey = localStorage.getItem('xk_key') || '';
 let systemPrompt = localStorage.getItem('xk_prompt') || document.getElementById('promptInput').value;
 let chats = JSON.parse(localStorage.getItem('xk_chats') || '[]');
 let currentChatId = localStorage.getItem('xk_current') || null;
+let globalMemory = JSON.parse(localStorage.getItem('xk_memory') || '{"text":"","files":[]}');
 let busy = false;
 let editingMsgIndex = -1;
 let deletingType = null;
@@ -681,6 +752,8 @@ let renamingChatId = null;
 function init() {
     document.getElementById('apiKeyInput').value = apiKey;
     document.getElementById('promptInput').value = systemPrompt;
+    document.getElementById('memoryInput').value = globalMemory.text || '';
+    renderMemoryFiles();
     
     if (chats.length === 0) {
         newChat(false);
@@ -991,8 +1064,17 @@ async function callAndRespond(userText) {
     try {
         const model = getSelectedModel();
         
+        // 构建system message，包含全局记忆
+        let fullSystemPrompt = systemPrompt;
+        const memoryText = globalMemory.text || '';
+        const memoryFilesText = (globalMemory.files || []).map(f => `【${f.name}】\n${f.content}`).join('\n\n');
+        const allMemory = [memoryText, memoryFilesText].filter(s => s.trim()).join('\n\n');
+        if (allMemory) {
+            fullSystemPrompt += '\n\n【全局记忆】\n' + allMemory;
+        }
+
         const messages = [
-            { role: 'system', content: systemPrompt }
+            { role: 'system', content: fullSystemPrompt }
         ];
         
         const recentHistory = chat.messages.slice(-20);
@@ -1104,8 +1186,10 @@ function closeSettings() {
 function saveSettings() {
     apiKey = document.getElementById('apiKeyInput').value.trim();
     systemPrompt = document.getElementById('promptInput').value.trim();
+    globalMemory.text = document.getElementById('memoryInput').value.trim();
     localStorage.setItem('xk_key', apiKey);
     localStorage.setItem('xk_prompt', systemPrompt);
+    localStorage.setItem('xk_memory', JSON.stringify(globalMemory));
     closeSettings();
     alert('设置已保存 💗');
 }
@@ -1160,6 +1244,66 @@ function formatDateTime(date) {
     const h = String(date.getHours()).padStart(2, '0');
     const min = String(date.getMinutes()).padStart(2, '0');
     return `${y}-${m}-${d} ${h}:${min}`;
+}
+
+// ==================== 全局记忆 ====================
+function handleMemoryFiles(event) {
+    const files = Array.from(event.target.files);
+    const allowed = ['.txt', '.md', '.json'];
+
+    files.forEach(file => {
+        const ext = '.' + file.name.split('.').pop().toLowerCase();
+        if (!allowed.includes(ext)) {
+            alert(`不支持的格式: ${file.name}\n仅支持 txt, md, json`);
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            globalMemory.files = globalMemory.files || [];
+            // 避免重名覆盖
+            const existing = globalMemory.files.findIndex(f => f.name === file.name);
+            const fileObj = { name: file.name, content: e.target.result, size: file.size };
+            if (existing >= 0) {
+                globalMemory.files[existing] = fileObj;
+            } else {
+                globalMemory.files.push(fileObj);
+            }
+            localStorage.setItem('xk_memory', JSON.stringify(globalMemory));
+            renderMemoryFiles();
+        };
+        reader.readAsText(file);
+    });
+
+    event.target.value = '';
+}
+
+function deleteMemoryFile(index) {
+    globalMemory.files.splice(index, 1);
+    localStorage.setItem('xk_memory', JSON.stringify(globalMemory));
+    renderMemoryFiles();
+}
+
+function renderMemoryFiles() {
+    const list = document.getElementById('memoryFileList');
+    if (!list) return;
+    const files = globalMemory.files || [];
+    if (files.length === 0) {
+        list.innerHTML = '';
+        return;
+    }
+    list.innerHTML = files.map((f, i) => {
+        const sizeStr = f.size ? (f.size < 1024 ? f.size + 'B' : (f.size / 1024).toFixed(1) + 'KB') : '';
+        const icon = f.name.endsWith('.md') ? '📝' : f.name.endsWith('.json') ? '📋' : '📄';
+        return `
+            <div class="memory-file-item">
+                <span class="file-icon">${icon}</span>
+                <span class="file-name">${escapeHtml(f.name)}</span>
+                <span class="file-size">${sizeStr}</span>
+                <button class="file-delete" onclick="deleteMemoryFile(${i})" title="移除">✕</button>
+            </div>
+        `;
+    }).join('');
 }
 
 // ==================== 导出对话 ====================
