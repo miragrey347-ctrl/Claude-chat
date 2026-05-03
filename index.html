@@ -654,6 +654,35 @@
         }
         .memory-file-item .file-delete:hover { color: var(--danger); }
 
+        /* 云同步 */
+        .sync-status {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+            min-height: 18px;
+        }
+        .sync-status.success { color: #9ccfd8; }
+        .sync-status.error { color: var(--danger); }
+        .sync-status.syncing { color: var(--star); }
+        .sync-buttons {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .sync-btn {
+            flex: 1;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .sync-btn:hover { border-color: var(--accent); }
+        .sync-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
         .save-btn {
             width: 100%;
             background: linear-gradient(135deg, var(--accent), #9c89b8);
@@ -847,6 +876,30 @@
             <div class="memory-file-list" id="memoryFileList"></div>
         </div>
 
+        <div class="field-divider"></div>
+
+        <div class="field">
+            <label>☁️ 云同步（GitHub）</label>
+            <p class="field-hint">将数据同步到 GitHub 私有仓库，实现多设备同步</p>
+        </div>
+        <div class="field">
+            <label>GitHub Token</label>
+            <input type="password" id="ghTokenInput" placeholder="ghp_...">
+        </div>
+        <div class="field">
+            <label>仓库名称</label>
+            <input type="text" id="ghRepoInput" placeholder="xiaoke-data">
+        </div>
+        <div class="field">
+            <label>分支</label>
+            <input type="text" id="ghBranchInput" placeholder="main">
+        </div>
+        <div class="sync-status" id="syncStatus"></div>
+        <div class="sync-buttons">
+            <button class="sync-btn upload" onclick="syncUpload()">☁️ 上传到云端</button>
+            <button class="sync-btn download" onclick="syncDownload()">📥 从云端下载</button>
+        </div>
+
         <button class="save-btn" onclick="saveSettings()">保存设置</button>
     </div>
 </div>
@@ -927,6 +980,7 @@ let systemPrompt = localStorage.getItem('xk_prompt') || document.getElementById(
 let chats = JSON.parse(localStorage.getItem('xk_chats') || '[]');
 let currentChatId = localStorage.getItem('xk_current') || null;
 let globalMemory = JSON.parse(localStorage.getItem('xk_memory') || '{"text":"","files":[]}');
+let ghConfig = JSON.parse(localStorage.getItem('xk_github') || '{"token":"","repo":"","branch":"main"}');
 let pendingFiles = []; // 待发送的附件
 let thinkingEnabled = false;
 let webSearchEnabled = false;
@@ -942,6 +996,27 @@ function init() {
     document.getElementById('promptInput').value = systemPrompt;
     document.getElementById('memoryInput').value = globalMemory.text || '';
     renderMemoryFiles();
+
+    // 恢复GitHub配置
+    document.getElementById('ghTokenInput').value = ghConfig.token || '';
+    document.getElementById('ghRepoInput').value = ghConfig.repo || '';
+    document.getElementById('ghBranchInput').value = ghConfig.branch || 'main';
+    updateSyncStatus();
+
+    // 恢复模型选择
+    const savedModel = localStorage.getItem('xk_model');
+    if (savedModel) {
+        const select = document.getElementById('modelSelect');
+        const option = select.querySelector(`option[value="${savedModel}"]`);
+        if (option) {
+            select.value = savedModel;
+        } else if (savedModel === 'custom') {
+            select.value = 'custom';
+            const customInput = document.getElementById('customModel');
+            customInput.style.display = 'block';
+            customInput.value = localStorage.getItem('xk_custom_model') || '';
+        }
+    }
     
     if (chats.length === 0) {
         newChat(false);
@@ -981,6 +1056,7 @@ function newChat(render = true) {
 
 function saveChats() {
     localStorage.setItem('xk_chats', JSON.stringify(chats));
+    autoSync();
 }
 
 function getCurrentChat() {
@@ -1485,12 +1561,15 @@ function onModelChange() {
     } else {
         customInput.style.display = 'none';
     }
+    localStorage.setItem('xk_model', select.value);
 }
 
 function getSelectedModel() {
     const select = document.getElementById('modelSelect');
     if (select.value === 'custom') {
-        return document.getElementById('customModel').value.trim() || 'anthropic/claude-opus-4.5';
+        const custom = document.getElementById('customModel').value.trim();
+        if (custom) localStorage.setItem('xk_custom_model', custom);
+        return custom || 'anthropic/claude-opus-4.5';
     }
     return select.value;
 }
@@ -1522,9 +1601,13 @@ function saveSettings() {
     apiKey = document.getElementById('apiKeyInput').value.trim();
     systemPrompt = document.getElementById('promptInput').value.trim();
     globalMemory.text = document.getElementById('memoryInput').value.trim();
+    ghConfig.token = document.getElementById('ghTokenInput').value.trim();
+    ghConfig.repo = document.getElementById('ghRepoInput').value.trim();
+    ghConfig.branch = document.getElementById('ghBranchInput').value.trim() || 'main';
     localStorage.setItem('xk_key', apiKey);
     localStorage.setItem('xk_prompt', systemPrompt);
     localStorage.setItem('xk_memory', JSON.stringify(globalMemory));
+    localStorage.setItem('xk_github', JSON.stringify(ghConfig));
     closeSettings();
     alert('设置已保存 💗');
 }
@@ -1773,6 +1856,231 @@ function renderMemoryFiles() {
             </div>
         `;
     }).join('');
+}
+
+// ==================== GitHub 云同步 ====================
+function getGhConfig() {
+    return {
+        token: document.getElementById('ghTokenInput').value.trim() || ghConfig.token,
+        repo: document.getElementById('ghRepoInput').value.trim() || ghConfig.repo,
+        branch: document.getElementById('ghBranchInput').value.trim() || ghConfig.branch || 'main'
+    };
+}
+
+function updateSyncStatus(text, type) {
+    const el = document.getElementById('syncStatus');
+    if (!el) return;
+    if (!text) {
+        const lastSync = localStorage.getItem('xk_last_sync');
+        if (lastSync) {
+            el.textContent = '上次同步: ' + formatDateTime(new Date(lastSync));
+            el.className = 'sync-status';
+        } else {
+            el.textContent = ghConfig.token ? '尚未同步' : '未配置';
+            el.className = 'sync-status';
+        }
+        return;
+    }
+    el.textContent = text;
+    el.className = 'sync-status ' + (type || '');
+}
+
+async function ghApiRequest(path, method, body, cfg) {
+    const url = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}?ref=${cfg.branch}`;
+    const opts = {
+        method: method || 'GET',
+        headers: {
+            'Authorization': 'token ' + cfg.token,
+            'Accept': 'application/vnd.github.v3+json'
+        }
+    };
+    if (body) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(url, opts);
+    if (method === 'GET' && res.status === 404) return null;
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'GitHub API ' + res.status);
+    }
+    return res.json();
+}
+
+async function ghGetFile(path, cfg) {
+    const data = await ghApiRequest(path, 'GET', null, cfg);
+    if (!data) return null;
+    return {
+        content: decodeURIComponent(escape(atob(data.content.replace(/\n/g, '')))),
+        sha: data.sha
+    };
+}
+
+async function ghPutFile(path, content, cfg, sha) {
+    const encoded = btoa(unescape(encodeURIComponent(content)));
+    const body = {
+        message: 'sync: ' + path,
+        content: encoded,
+        branch: cfg.branch
+    };
+    if (sha) body.sha = sha;
+    return ghApiRequest(path, 'PUT', body, cfg);
+}
+
+function buildSyncConfig() {
+    const raw = getGhConfig();
+    if (!raw.token || !raw.repo) {
+        throw new Error('请先填写 GitHub Token 和仓库名称');
+    }
+    // 从token获取用户名
+    return {
+        token: raw.token,
+        repo: raw.repo,
+        branch: raw.branch,
+        owner: null // 需要先获取
+    };
+}
+
+async function getGhUsername(token) {
+    const res = await fetch('https://api.github.com/user', {
+        headers: { 'Authorization': 'token ' + token }
+    });
+    if (!res.ok) throw new Error('GitHub Token 无效');
+    const data = await res.json();
+    return data.login;
+}
+
+async function syncUpload() {
+    const btns = document.querySelectorAll('.sync-btn');
+    btns.forEach(b => b.disabled = true);
+    
+    try {
+        updateSyncStatus('同步中...', 'syncing');
+        const cfg = buildSyncConfig();
+        cfg.owner = await getGhUsername(cfg.token);
+
+        // 准备数据
+        const chatsData = JSON.stringify(chats, null, 2);
+        const settingsData = JSON.stringify({
+            systemPrompt: systemPrompt,
+            model: localStorage.getItem('xk_model') || 'anthropic/claude-opus-4.5',
+            customModel: localStorage.getItem('xk_custom_model') || ''
+        }, null, 2);
+        const memoryData = JSON.stringify(globalMemory, null, 2);
+
+        // 获取现有文件的SHA（更新需要）
+        const [chatsSha, settingsSha, memorySha] = await Promise.all([
+            ghGetFile('chats.json', cfg).then(f => f?.sha),
+            ghGetFile('settings.json', cfg).then(f => f?.sha),
+            ghGetFile('memory.json', cfg).then(f => f?.sha)
+        ]);
+
+        // 上传
+        await Promise.all([
+            ghPutFile('chats.json', chatsData, cfg, chatsSha),
+            ghPutFile('settings.json', settingsData, cfg, settingsSha),
+            ghPutFile('memory.json', memoryData, cfg, memorySha)
+        ]);
+
+        localStorage.setItem('xk_last_sync', new Date().toISOString());
+        updateSyncStatus('上传成功 ✓', 'success');
+        setTimeout(() => updateSyncStatus(), 3000);
+
+    } catch (err) {
+        updateSyncStatus('上传失败: ' + err.message, 'error');
+    }
+    
+    btns.forEach(b => b.disabled = false);
+}
+
+async function syncDownload() {
+    const btns = document.querySelectorAll('.sync-btn');
+    btns.forEach(b => b.disabled = true);
+    
+    try {
+        updateSyncStatus('下载中...', 'syncing');
+        const cfg = buildSyncConfig();
+        cfg.owner = await getGhUsername(cfg.token);
+
+        const [chatsFile, settingsFile, memoryFile] = await Promise.all([
+            ghGetFile('chats.json', cfg),
+            ghGetFile('settings.json', cfg),
+            ghGetFile('memory.json', cfg)
+        ]);
+
+        if (!chatsFile && !settingsFile && !memoryFile) {
+            updateSyncStatus('云端没有数据', 'error');
+            btns.forEach(b => b.disabled = false);
+            return;
+        }
+
+        if (!confirm('从云端下载会覆盖本地数据，确定继续？')) {
+            updateSyncStatus();
+            btns.forEach(b => b.disabled = false);
+            return;
+        }
+
+        if (chatsFile) {
+            chats = JSON.parse(chatsFile.content);
+            localStorage.setItem('xk_chats', JSON.stringify(chats));
+        }
+
+        if (settingsFile) {
+            const settings = JSON.parse(settingsFile.content);
+            systemPrompt = settings.systemPrompt || systemPrompt;
+            localStorage.setItem('xk_prompt', systemPrompt);
+            document.getElementById('promptInput').value = systemPrompt;
+            if (settings.model) {
+                localStorage.setItem('xk_model', settings.model);
+            }
+            if (settings.customModel) {
+                localStorage.setItem('xk_custom_model', settings.customModel);
+            }
+        }
+
+        if (memoryFile) {
+            globalMemory = JSON.parse(memoryFile.content);
+            localStorage.setItem('xk_memory', JSON.stringify(globalMemory));
+            document.getElementById('memoryInput').value = globalMemory.text || '';
+            renderMemoryFiles();
+        }
+
+        // 重新渲染
+        if (chats.length > 0) {
+            currentChatId = chats[0].id;
+            localStorage.setItem('xk_current', currentChatId);
+        }
+        renderChatList();
+        loadChat(currentChatId);
+
+        localStorage.setItem('xk_last_sync', new Date().toISOString());
+        updateSyncStatus('下载成功 ✓', 'success');
+        setTimeout(() => updateSyncStatus(), 3000);
+
+    } catch (err) {
+        updateSyncStatus('下载失败: ' + err.message, 'error');
+    }
+    
+    btns.forEach(b => b.disabled = false);
+}
+
+// 自动同步（保存聊天后触发，防抖）
+let syncTimer = null;
+function autoSync() {
+    if (!ghConfig.token || !ghConfig.repo) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(async () => {
+        try {
+            const cfg = { ...ghConfig };
+            cfg.owner = await getGhUsername(cfg.token);
+            const chatsData = JSON.stringify(chats, null, 2);
+            const sha = await ghGetFile('chats.json', cfg).then(f => f?.sha);
+            await ghPutFile('chats.json', chatsData, cfg, sha);
+            localStorage.setItem('xk_last_sync', new Date().toISOString());
+        } catch (e) {
+            console.warn('Auto sync failed:', e.message);
+        }
+    }, 10000); // 10秒防抖
 }
 
 // ==================== 导出对话 ====================
