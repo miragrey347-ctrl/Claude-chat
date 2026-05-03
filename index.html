@@ -1462,7 +1462,7 @@ async function callAndRespond(userText, attachedFiles) {
                 { 
                     type: 'text', 
                     text: systemPrompt + '\n\n【全局记忆】\n' + allMemory,
-                    cache_control: { type: 'ephemeral', ttl: '1h' }
+                    cache_control: { type: 'ephemeral' }
                 }
             ];
         } else if (isClaude) {
