@@ -281,6 +281,9 @@
             flex-wrap: wrap;
         }
         .message.user .msg-meta { justify-content: flex-end; }
+        .cache-hit { color: #9ccfd8; }
+        .cache-write { color: var(--star); }
+        .cache-miss { color: var(--text-muted); }
 
         .msg-actions {
             display: none;
@@ -933,6 +936,17 @@ function renderMessage(m, index) {
     if (m.tokens) {
         metaHtml += `<span>📊 ${m.tokens} tokens</span>`;
     }
+    if (m.cacheInfo) {
+        const ci = m.cacheInfo;
+        if (ci.cached > 0) {
+            const pct = Math.round(ci.cached / ci.prompt * 100);
+            metaHtml += `<span class="cache-hit">⚡ 缓存命中 ${ci.cached.toLocaleString()} tokens (${pct}%)</span>`;
+        } else if (ci.written > 0) {
+            metaHtml += `<span class="cache-write">📝 缓存写入 ${ci.written.toLocaleString()} tokens</span>`;
+        } else {
+            metaHtml += `<span class="cache-miss">❌ 无缓存</span>`;
+        }
+    }
     
     const div = document.createElement('div');
     div.className = 'message ' + m.role;
@@ -1063,18 +1077,41 @@ async function callAndRespond(userText) {
     
     try {
         const model = getSelectedModel();
+        const isClaude = model.includes('claude');
         
         // 构建system message，包含全局记忆
-        let fullSystemPrompt = systemPrompt;
         const memoryText = globalMemory.text || '';
         const memoryFilesText = (globalMemory.files || []).map(f => `【${f.name}】\n${f.content}`).join('\n\n');
         const allMemory = [memoryText, memoryFilesText].filter(s => s.trim()).join('\n\n');
-        if (allMemory) {
-            fullSystemPrompt += '\n\n【全局记忆】\n' + allMemory;
+
+        let systemContent;
+
+        if (isClaude && allMemory) {
+            // Claude + 有记忆：用显式缓存断点
+            systemContent = [
+                { 
+                    type: 'text', 
+                    text: systemPrompt + '\n\n【全局记忆】\n' + allMemory,
+                    cache_control: { type: 'ephemeral', ttl: '1h' }
+                }
+            ];
+        } else if (isClaude) {
+            // Claude + 无记忆：system prompt也标记缓存
+            systemContent = [
+                { 
+                    type: 'text', 
+                    text: systemPrompt,
+                    cache_control: { type: 'ephemeral' }
+                }
+            ];
+        } else if (allMemory) {
+            systemContent = systemPrompt + '\n\n【全局记忆】\n' + allMemory;
+        } else {
+            systemContent = systemPrompt;
         }
 
         const messages = [
-            { role: 'system', content: fullSystemPrompt }
+            { role: 'system', content: systemContent }
         ];
         
         const recentHistory = chat.messages.slice(-20);
@@ -1086,10 +1123,6 @@ async function callAndRespond(userText) {
             model: model,
             messages: messages
         };
-        
-        if (model.includes('claude')) {
-            requestBody.cache_control = { type: "ephemeral", ttl: "1h" };
-        }
         
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
@@ -1113,11 +1146,23 @@ async function callAndRespond(userText) {
         const usage = data.usage;
         const totalTokens = usage ? usage.total_tokens : null;
         
+        // 提取缓存信息
+        let cacheInfo = null;
+        if (usage && usage.prompt_tokens_details) {
+            const details = usage.prompt_tokens_details;
+            cacheInfo = {
+                cached: details.cached_tokens || 0,
+                written: details.cache_write_tokens || 0,
+                prompt: usage.prompt_tokens || 0
+            };
+        }
+        
         const assistantMsg = {
             role: 'assistant',
             content: reply,
             time: new Date().toISOString(),
-            tokens: totalTokens
+            tokens: totalTokens,
+            cacheInfo: cacheInfo
         };
         chat.messages.push(assistantMsg);
         saveChats();
