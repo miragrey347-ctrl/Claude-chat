@@ -370,6 +370,89 @@
             flex-shrink: 0;
         }
 
+        /* 附件按钮 */
+        .attach-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 4px;
+            flex-shrink: 0;
+            transition: color 0.2s;
+        }
+        .attach-btn:hover { color: var(--text-primary); }
+
+        /* 文件预览区 */
+        .file-preview {
+            display: flex;
+            gap: 8px;
+            padding: 8px 12px;
+            flex-wrap: wrap;
+        }
+        .file-preview:empty { display: none; }
+        .file-preview-item {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            max-width: 160px;
+        }
+        .file-preview-item img {
+            width: 36px;
+            height: 36px;
+            object-fit: cover;
+            border-radius: 4px;
+        }
+        .file-preview-item .fp-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+        }
+        .file-preview-item .fp-remove {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--danger);
+            color: white;
+            border: none;
+            font-size: 0.6rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+
+        /* 消息中的附件显示 */
+        .msg-files {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+        .msg-file-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+
         /* 遮罩 */
         .sidebar-overlay {
             display: none;
@@ -621,7 +704,10 @@
     </div>
 
     <div class="input-area">
+        <div class="file-preview" id="filePreview"></div>
         <div class="input-box">
+            <button class="attach-btn" onclick="document.getElementById('fileInput').click()" title="添加附件">📎</button>
+            <input type="file" id="fileInput" multiple accept="image/jpeg,image/png,image/gif,image/webp,.txt,.md,.pdf" onchange="handleFileSelect(event)" style="display:none;">
             <textarea id="input" placeholder="说点什么..." rows="1" onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
             <button class="send-btn" onclick="send()">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -738,6 +824,13 @@
     </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+if (typeof pdfjsLib !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+</script>
+
 <script>
 // ==================== 状态管理 ====================
 let apiKey = localStorage.getItem('xk_key') || '';
@@ -745,6 +838,7 @@ let systemPrompt = localStorage.getItem('xk_prompt') || document.getElementById(
 let chats = JSON.parse(localStorage.getItem('xk_chats') || '[]');
 let currentChatId = localStorage.getItem('xk_current') || null;
 let globalMemory = JSON.parse(localStorage.getItem('xk_memory') || '{"text":"","files":[]}');
+let pendingFiles = []; // 待发送的附件
 let busy = false;
 let editingMsgIndex = -1;
 let deletingType = null;
@@ -962,9 +1056,20 @@ function renderMessage(m, index) {
         <button class="msg-action-btn danger" onclick="deleteMessage(${index})">删除</button>
     `;
     
+    // 构建文件附件HTML
+    let filesHtml = '';
+    if (m.files && m.files.length > 0) {
+        filesHtml = '<div class="msg-files">' + m.files.map(f => {
+            const icon = f.type === 'image' ? '🖼️' : (f.name.endsWith('.pdf') ? '📕' : '📄');
+            const sizeStr = f.size ? (f.size < 1024 ? f.size + 'B' : (f.size / 1024).toFixed(1) + 'KB') : '';
+            return `<span class="msg-file-tag">${icon} ${escapeHtml(f.name)} ${sizeStr}</span>`;
+        }).join('') + '</div>';
+    }
+
     div.innerHTML = `
         <div class="msg-avatar">${m.role === 'assistant' ? '🐱' : '🌸'}</div>
         <div class="msg-wrapper">
+            ${filesHtml}
             <div class="msg-content">${escapeHtml(m.content)}</div>
             <div class="msg-meta">${metaHtml}</div>
             <div class="msg-actions">${actionsHtml}</div>
@@ -1035,8 +1140,9 @@ async function regenerate(index) {
 async function send() {
     const input = document.getElementById('input');
     const text = input.value.trim();
+    const files = [...pendingFiles];
     
-    if (!text || busy) return;
+    if ((!text && files.length === 0) || busy) return;
     
     if (!apiKey) {
         alert('请先在设置里填写 API Key');
@@ -1051,12 +1157,23 @@ async function send() {
         content: text,
         time: new Date().toISOString()
     };
+    
+    // 存文件元信息（不存base64，省localStorage空间）
+    if (files.length > 0) {
+        userMsg.files = files.map(f => ({
+            name: f.name,
+            type: f.type,
+            size: f.size
+        }));
+    }
+    
     chat.messages.push(userMsg);
     saveChats();
     renderMessage(userMsg, chat.messages.length - 1);
     
     if (chat.name === '新对话' && chat.messages.length === 1) {
-        chat.name = text.slice(0, 20) + (text.length > 20 ? '...' : '');
+        const autoName = text || files.map(f => f.name).join(', ');
+        chat.name = autoName.slice(0, 20) + (autoName.length > 20 ? '...' : '');
         saveChats();
         renderChatList();
         document.getElementById('chatTitle').textContent = chat.name;
@@ -1064,12 +1181,13 @@ async function send() {
     
     input.value = '';
     input.style.height = 'auto';
+    clearPendingFiles();
     scrollDown();
     
-    await callAndRespond(text);
+    await callAndRespond(text, files);
 }
 
-async function callAndRespond(userText) {
+async function callAndRespond(userText, attachedFiles) {
     const chat = getCurrentChat();
     
     busy = true;
@@ -1118,6 +1236,33 @@ async function callAndRespond(userText) {
         recentHistory.forEach(m => {
             messages.push({ role: m.role, content: m.content });
         });
+
+        // 如果有附件，替换最后一条user消息为多模态content数组
+        if (attachedFiles && attachedFiles.length > 0) {
+            const lastMsg = messages[messages.length - 1];
+            const contentParts = [];
+
+            // 文档内容拼到文本前面
+            const docTexts = attachedFiles
+                .filter(f => f.type === 'document')
+                .map(f => `【文件: ${f.name}】\n${f.content}`)
+                .join('\n\n');
+
+            const fullText = docTexts ? docTexts + '\n\n' + (userText || '') : (userText || '');
+            if (fullText.trim()) {
+                contentParts.push({ type: 'text', text: fullText });
+            }
+
+            // 图片作为image_url
+            attachedFiles.filter(f => f.type === 'image').forEach(f => {
+                contentParts.push({
+                    type: 'image_url',
+                    image_url: { url: f.dataUrl }
+                });
+            });
+
+            lastMsg.content = contentParts;
+        }
         
         const requestBody = {
             model: model,
@@ -1289,6 +1434,117 @@ function formatDateTime(date) {
     const h = String(date.getHours()).padStart(2, '0');
     const min = String(date.getMinutes()).padStart(2, '0');
     return `${y}-${m}-${d} ${h}:${min}`;
+}
+
+// ==================== 对话内文件上传 ====================
+function handleFileSelect(event) {
+    const files = Array.from(event.target.files);
+    const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    const docExts = ['.txt', '.md', '.pdf'];
+
+    files.forEach(file => {
+        const isImage = imageTypes.includes(file.type);
+        const ext = '.' + file.name.split('.').pop().toLowerCase();
+        const isDoc = docExts.includes(ext);
+
+        if (!isImage && !isDoc) {
+            alert(`不支持的格式: ${file.name}\n支持: jpg, png, gif, webp, txt, md, pdf`);
+            return;
+        }
+
+        const reader = new FileReader();
+
+        if (isImage) {
+            reader.onload = (e) => {
+                pendingFiles.push({
+                    name: file.name,
+                    type: 'image',
+                    mimeType: file.type,
+                    dataUrl: e.target.result,
+                    size: file.size
+                });
+                renderFilePreview();
+            };
+            reader.readAsDataURL(file);
+        } else if (ext === '.pdf') {
+            reader.onload = async (e) => {
+                try {
+                    const text = await extractPdfText(e.target.result);
+                    pendingFiles.push({
+                        name: file.name,
+                        type: 'document',
+                        content: text,
+                        size: file.size
+                    });
+                    renderFilePreview();
+                } catch (err) {
+                    alert('PDF 读取失败: ' + err.message);
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        } else {
+            reader.onload = (e) => {
+                pendingFiles.push({
+                    name: file.name,
+                    type: 'document',
+                    content: e.target.result,
+                    size: file.size
+                });
+                renderFilePreview();
+            };
+            reader.readAsText(file);
+        }
+    });
+
+    event.target.value = '';
+}
+
+async function extractPdfText(arrayBuffer) {
+    if (typeof pdfjsLib === 'undefined') {
+        throw new Error('PDF.js 未加载');
+    }
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let text = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        text += content.items.map(item => item.str).join(' ') + '\n';
+    }
+    return text.trim();
+}
+
+function removePendingFile(index) {
+    pendingFiles.splice(index, 1);
+    renderFilePreview();
+}
+
+function renderFilePreview() {
+    const container = document.getElementById('filePreview');
+    container.innerHTML = pendingFiles.map((f, i) => {
+        if (f.type === 'image') {
+            return `
+                <div class="file-preview-item">
+                    <img src="${f.dataUrl}" alt="${escapeHtml(f.name)}">
+                    <span class="fp-name">${escapeHtml(f.name)}</span>
+                    <button class="fp-remove" onclick="removePendingFile(${i})">✕</button>
+                </div>
+            `;
+        } else {
+            const icon = f.name.endsWith('.pdf') ? '📕' : '📄';
+            return `
+                <div class="file-preview-item">
+                    <span>${icon}</span>
+                    <span class="fp-name">${escapeHtml(f.name)}</span>
+                    <button class="fp-remove" onclick="removePendingFile(${i})">✕</button>
+                </div>
+            `;
+        }
+    }).join('');
+}
+
+function clearPendingFiles() {
+    pendingFiles = [];
+    renderFilePreview();
 }
 
 // ==================== 全局记忆 ====================
