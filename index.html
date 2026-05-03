@@ -1088,7 +1088,7 @@ async function callAndRespond(userText) {
         };
         
         if (model.includes('claude')) {
-            requestBody.cache_control = { type: "ephemeral" };
+            requestBody.cache_control = { type: "ephemeral", ttl: "1h" };
         }
         
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
