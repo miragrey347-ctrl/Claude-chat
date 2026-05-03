@@ -828,7 +828,7 @@
 
     <div class="model-bar">
         <label>模型:</label>
-        <select id="modelSelect" onchange="onModelChange()">
+        <select id="modelSelect" onchange="onModelChange()" oninput="onModelChange()">
             <option value="anthropic/claude-opus-4.5">Opus 4.5 💗</option>
             <option value="custom">+ 添加模型...</option>
         </select>
@@ -1038,14 +1038,17 @@ function init() {
     // 恢复模型选择
     renderModelOptions();
     const savedModel = localStorage.getItem('xk_model');
-    if (savedModel) {
+    if (savedModel && savedModel !== 'custom') {
         const select = document.getElementById('modelSelect');
         if (select.querySelector(`option[value="${savedModel}"]`)) {
             select.value = savedModel;
             const isDefault = savedModel === 'anthropic/claude-opus-4.5';
             document.getElementById('modelDeleteBtn').style.display = 
-                (isDefault || savedModel === 'custom') ? 'none' : 'inline-block';
+                isDefault ? 'none' : 'inline-block';
         }
+    } else {
+        // 清除旧的custom值，重置为默认
+        localStorage.setItem('xk_model', 'anthropic/claude-opus-4.5');
     }
     
     if (chats.length === 0) {
