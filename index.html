@@ -263,6 +263,27 @@
         }
         .thinking-content.show { display: block; }
 
+        /* 搜索引用来源 */
+        .msg-citations {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border);
+        }
+        .msg-citations-title {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        .msg-citations a {
+            display: inline-block;
+            font-size: 0.7rem;
+            color: var(--accent);
+            text-decoration: none;
+            margin-right: 10px;
+            margin-bottom: 2px;
+        }
+        .msg-citations a:hover { text-decoration: underline; }
+
         /* 聊天区 */
         .chat-container {
             flex: 1;
@@ -759,6 +780,9 @@
         <button class="toggle-btn" id="thinkingToggle" onclick="toggleThinking()">
             <span class="toggle-icon">💭</span> 思考
         </button>
+        <button class="toggle-btn" id="webSearchToggle" onclick="toggleWebSearch()">
+            <span class="toggle-icon">🌐</span> 联网
+        </button>
     </div>
 
     <div class="chat-container" id="chat">
@@ -905,6 +929,7 @@ let currentChatId = localStorage.getItem('xk_current') || null;
 let globalMemory = JSON.parse(localStorage.getItem('xk_memory') || '{"text":"","files":[]}');
 let pendingFiles = []; // 待发送的附件
 let thinkingEnabled = false;
+let webSearchEnabled = false;
 let busy = false;
 let editingMsgIndex = -1;
 let deletingType = null;
@@ -1146,12 +1171,36 @@ function renderMessage(m, index) {
         `;
     }
 
+    // 构建引用来源HTML
+    let citationsHtml = '';
+    if (m.annotations && m.annotations.length > 0) {
+        const urlCitations = m.annotations.filter(a => a.type === 'url_citation' && a.url_citation);
+        if (urlCitations.length > 0) {
+            // 去重
+            const seen = new Set();
+            const unique = urlCitations.filter(a => {
+                const url = a.url_citation.url;
+                if (seen.has(url)) return false;
+                seen.add(url);
+                return true;
+            });
+            const links = unique.map(a => {
+                const c = a.url_citation;
+                const domain = new URL(c.url).hostname.replace('www.', '');
+                const title = c.title || domain;
+                return `<a href="${escapeHtml(c.url)}" target="_blank" rel="noopener">${escapeHtml(title)}</a>`;
+            }).join('');
+            citationsHtml = `<div class="msg-citations"><div class="msg-citations-title">🔗 来源</div>${links}</div>`;
+        }
+    }
+
     div.innerHTML = `
         <div class="msg-avatar">${m.role === 'assistant' ? '🐱' : '🌸'}</div>
         <div class="msg-wrapper">
             ${filesHtml}
             ${thinkingHtml}
             <div class="msg-content">${escapeHtml(m.content)}</div>
+            ${citationsHtml}
             <div class="msg-meta">${metaHtml}</div>
             <div class="msg-actions">${actionsHtml}</div>
         </div>
@@ -1354,6 +1403,12 @@ async function callAndRespond(userText, attachedFiles) {
         if (thinkingEnabled) {
             requestBody.reasoning = { effort: 'medium' };
         }
+
+        // 联网搜索
+        if (webSearchEnabled) {
+            requestBody.tools = requestBody.tools || [];
+            requestBody.tools.push({ type: 'openrouter:web_search' });
+        }
         
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
@@ -1375,6 +1430,7 @@ async function callAndRespond(userText, attachedFiles) {
         const data = await res.json();
         const reply = data.choices[0].message.content;
         const reasoning = data.choices[0].message.reasoning || null;
+        const annotations = data.choices[0].message.annotations || null;
         const usage = data.usage;
         const totalTokens = usage ? usage.total_tokens : null;
         
@@ -1397,6 +1453,7 @@ async function callAndRespond(userText, attachedFiles) {
             cacheInfo: cacheInfo
         };
         if (reasoning) assistantMsg.reasoning = reasoning;
+        if (annotations && annotations.length > 0) assistantMsg.annotations = annotations;
         chat.messages.push(assistantMsg);
         saveChats();
         renderMessage(assistantMsg, chat.messages.length - 1);
@@ -1538,6 +1595,13 @@ function toggleThinkingContent(id) {
         toggle.classList.toggle('expanded');
         content.classList.toggle('show');
     }
+}
+
+// ==================== 联网搜索 ====================
+function toggleWebSearch() {
+    webSearchEnabled = !webSearchEnabled;
+    const btn = document.getElementById('webSearchToggle');
+    btn.classList.toggle('active', webSearchEnabled);
 }
 
 // ==================== 对话内文件上传 ====================
