@@ -200,6 +200,33 @@
         }
         .model-bar input { flex: 1; min-width: 150px; }
         .model-bar input::placeholder { color: var(--text-muted); }
+        .custom-model-row {
+            display: flex;
+            gap: 6px;
+            flex: 1;
+            min-width: 200px;
+        }
+        .model-save-btn {
+            padding: 4px 12px;
+            background: var(--accent);
+            color: var(--bg-primary);
+            border: none;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            white-space: nowrap;
+            font-weight: 600;
+        }
+        .model-delete-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 0.9rem;
+            padding: 2px;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+        .model-delete-btn:hover { opacity: 1; }
 
         /* 开关按钮 */
         .toggle-btn {
@@ -803,9 +830,13 @@
         <label>模型:</label>
         <select id="modelSelect" onchange="onModelChange()">
             <option value="anthropic/claude-opus-4.5">Opus 4.5 💗</option>
-            <option value="custom">自定义模型...</option>
+            <option value="custom">+ 添加模型...</option>
         </select>
-        <input type="text" id="customModel" placeholder="输入模型全称，如 openai/gpt-4o" style="display:none;">
+        <div class="custom-model-row" id="customModelRow" style="display:none;">
+            <input type="text" id="customModel" placeholder="输入模型全称，如 anthropic/claude-haiku-4-5">
+            <button class="model-save-btn" onclick="saveCustomModel()">保存</button>
+        </div>
+        <button class="model-delete-btn" id="modelDeleteBtn" onclick="deleteCurrentModel()" style="display:none;" title="删除此模型">🗑️</button>
         <button class="toggle-btn" id="thinkingToggle" onclick="toggleThinking()">
             <span class="toggle-icon">💭</span> 思考
         </button>
@@ -981,6 +1012,7 @@ let chats = JSON.parse(localStorage.getItem('xk_chats') || '[]');
 let currentChatId = localStorage.getItem('xk_current') || null;
 let globalMemory = JSON.parse(localStorage.getItem('xk_memory') || '{"text":"","files":[]}');
 let ghConfig = JSON.parse(localStorage.getItem('xk_github') || '{"token":"","repo":"","branch":"main"}');
+let savedModels = JSON.parse(localStorage.getItem('xk_saved_models') || '[]');
 let pendingFiles = []; // 待发送的附件
 let thinkingEnabled = false;
 let webSearchEnabled = false;
@@ -1004,17 +1036,15 @@ function init() {
     updateSyncStatus();
 
     // 恢复模型选择
+    renderModelOptions();
     const savedModel = localStorage.getItem('xk_model');
     if (savedModel) {
         const select = document.getElementById('modelSelect');
-        const option = select.querySelector(`option[value="${savedModel}"]`);
-        if (option) {
+        if (select.querySelector(`option[value="${savedModel}"]`)) {
             select.value = savedModel;
-        } else if (savedModel === 'custom') {
-            select.value = 'custom';
-            const customInput = document.getElementById('customModel');
-            customInput.style.display = 'block';
-            customInput.value = localStorage.getItem('xk_custom_model') || '';
+            const isDefault = savedModel === 'anthropic/claude-opus-4.5';
+            document.getElementById('modelDeleteBtn').style.display = 
+                (isDefault || savedModel === 'custom') ? 'none' : 'inline-block';
         }
     }
     
@@ -1298,11 +1328,24 @@ function closeEditModal() {
     editingMsgIndex = -1;
 }
 
-function confirmEdit() {
+async function confirmEdit() {
     const newContent = document.getElementById('editInput').value.trim();
     if (newContent && editingMsgIndex >= 0) {
         const chat = getCurrentChat();
-        chat.messages[editingMsgIndex].content = newContent;
+        const editedMsg = chat.messages[editingMsgIndex];
+        editedMsg.content = newContent;
+        
+        // 如果编辑的是用户消息，截断后面所有消息并重新生成
+        if (editedMsg.role === 'user') {
+            chat.messages = chat.messages.slice(0, editingMsgIndex + 1);
+            saveChats();
+            loadChat(currentChatId);
+            closeEditModal();
+            await callAndRespond(newContent);
+            return;
+        }
+        
+        // 编辑的是AI消息，只更新内容
         saveChats();
         loadChat(currentChatId);
     }
@@ -1551,24 +1594,94 @@ async function callAndRespond(userText, attachedFiles) {
 }
 
 // ==================== 模型选择 ====================
+function renderModelOptions() {
+    const select = document.getElementById('modelSelect');
+    const currentVal = select.value;
+    
+    // 清空除第一个(Opus)
+    while (select.options.length > 1) {
+        select.remove(1);
+    }
+    
+    // 追加保存的自定义模型
+    savedModels.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        const display = m.includes('/') ? m.split('/').pop() : m;
+        opt.textContent = display;
+        select.appendChild(opt);
+    });
+    
+    // 最后加"添加模型"选项
+    const addOpt = document.createElement('option');
+    addOpt.value = 'custom';
+    addOpt.textContent = '+ 添加模型...';
+    select.appendChild(addOpt);
+    
+    // 恢复选中
+    if (currentVal && select.querySelector(`option[value="${currentVal}"]`)) {
+        select.value = currentVal;
+    }
+}
+
 function onModelChange() {
     const select = document.getElementById('modelSelect');
-    const customInput = document.getElementById('customModel');
+    const customRow = document.getElementById('customModelRow');
+    const deleteBtn = document.getElementById('modelDeleteBtn');
     
     if (select.value === 'custom') {
-        customInput.style.display = 'block';
-        customInput.focus();
+        customRow.style.display = 'flex';
+        deleteBtn.style.display = 'none';
+        document.getElementById('customModel').focus();
     } else {
-        customInput.style.display = 'none';
+        customRow.style.display = 'none';
+        // 只对自定义保存的模型显示删除按钮
+        const isDefault = select.value === 'anthropic/claude-opus-4.5';
+        deleteBtn.style.display = isDefault ? 'none' : 'inline-block';
+        localStorage.setItem('xk_model', select.value);
     }
-    localStorage.setItem('xk_model', select.value);
+}
+
+function saveCustomModel() {
+    const input = document.getElementById('customModel');
+    const modelName = input.value.trim();
+    if (!modelName) return;
+    
+    if (!savedModels.includes(modelName)) {
+        savedModels.push(modelName);
+        localStorage.setItem('xk_saved_models', JSON.stringify(savedModels));
+    }
+    
+    renderModelOptions();
+    
+    const select = document.getElementById('modelSelect');
+    select.value = modelName;
+    document.getElementById('customModelRow').style.display = 'none';
+    document.getElementById('modelDeleteBtn').style.display = 'inline-block';
+    localStorage.setItem('xk_model', modelName);
+    input.value = '';
+}
+
+function deleteCurrentModel() {
+    const select = document.getElementById('modelSelect');
+    const model = select.value;
+    if (model === 'anthropic/claude-opus-4.5' || model === 'custom') return;
+    
+    if (!confirm(`删除模型「${model}」？`)) return;
+    
+    savedModels = savedModels.filter(m => m !== model);
+    localStorage.setItem('xk_saved_models', JSON.stringify(savedModels));
+    
+    renderModelOptions();
+    select.value = 'anthropic/claude-opus-4.5';
+    document.getElementById('modelDeleteBtn').style.display = 'none';
+    localStorage.setItem('xk_model', 'anthropic/claude-opus-4.5');
 }
 
 function getSelectedModel() {
     const select = document.getElementById('modelSelect');
     if (select.value === 'custom') {
         const custom = document.getElementById('customModel').value.trim();
-        if (custom) localStorage.setItem('xk_custom_model', custom);
         return custom || 'anthropic/claude-opus-4.5';
     }
     return select.value;
