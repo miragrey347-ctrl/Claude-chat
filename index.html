@@ -201,6 +201,68 @@
         .model-bar input { flex: 1; min-width: 150px; }
         .model-bar input::placeholder { color: var(--text-muted); }
 
+        /* 开关按钮 */
+        .toggle-btn {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .toggle-btn:hover { border-color: var(--text-secondary); }
+        .toggle-btn.active {
+            background: var(--accent);
+            color: var(--bg-primary);
+            border-color: var(--accent);
+        }
+
+        /* 思考链折叠区域 */
+        .thinking-block {
+            margin-bottom: 8px;
+        }
+        .thinking-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .thinking-toggle:hover { border-color: var(--text-secondary); }
+        .thinking-toggle .arrow {
+            font-size: 0.6rem;
+            transition: transform 0.2s;
+        }
+        .thinking-toggle.expanded .arrow { transform: rotate(90deg); }
+        .thinking-content {
+            display: none;
+            margin-top: 6px;
+            padding: 10px 12px;
+            background: rgba(196, 167, 231, 0.06);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .thinking-content.show { display: block; }
+
         /* 聊天区 */
         .chat-container {
             flex: 1;
@@ -694,6 +756,9 @@
             <option value="custom">自定义模型...</option>
         </select>
         <input type="text" id="customModel" placeholder="输入模型全称，如 openai/gpt-4o" style="display:none;">
+        <button class="toggle-btn" id="thinkingToggle" onclick="toggleThinking()">
+            <span class="toggle-icon">💭</span> 思考
+        </button>
     </div>
 
     <div class="chat-container" id="chat">
@@ -839,6 +904,7 @@ let chats = JSON.parse(localStorage.getItem('xk_chats') || '[]');
 let currentChatId = localStorage.getItem('xk_current') || null;
 let globalMemory = JSON.parse(localStorage.getItem('xk_memory') || '{"text":"","files":[]}');
 let pendingFiles = []; // 待发送的附件
+let thinkingEnabled = false;
 let busy = false;
 let editingMsgIndex = -1;
 let deletingType = null;
@@ -1066,10 +1132,25 @@ function renderMessage(m, index) {
         }).join('') + '</div>';
     }
 
+    // 构建思考链HTML
+    let thinkingHtml = '';
+    if (m.reasoning) {
+        const thinkingId = 'think-' + index;
+        thinkingHtml = `
+            <div class="thinking-block">
+                <button class="thinking-toggle" data-thinking-id="${thinkingId}" onclick="toggleThinkingContent('${thinkingId}')">
+                    <span class="arrow">▶</span> 💭 查看思考过程
+                </button>
+                <div class="thinking-content" id="thinking-${thinkingId}">${escapeHtml(m.reasoning)}</div>
+            </div>
+        `;
+    }
+
     div.innerHTML = `
         <div class="msg-avatar">${m.role === 'assistant' ? '🐱' : '🌸'}</div>
         <div class="msg-wrapper">
             ${filesHtml}
+            ${thinkingHtml}
             <div class="msg-content">${escapeHtml(m.content)}</div>
             <div class="msg-meta">${metaHtml}</div>
             <div class="msg-actions">${actionsHtml}</div>
@@ -1268,6 +1349,11 @@ async function callAndRespond(userText, attachedFiles) {
             model: model,
             messages: messages
         };
+
+        // 思考链
+        if (thinkingEnabled) {
+            requestBody.reasoning = { effort: 'medium' };
+        }
         
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
@@ -1288,6 +1374,7 @@ async function callAndRespond(userText, attachedFiles) {
         
         const data = await res.json();
         const reply = data.choices[0].message.content;
+        const reasoning = data.choices[0].message.reasoning || null;
         const usage = data.usage;
         const totalTokens = usage ? usage.total_tokens : null;
         
@@ -1309,6 +1396,7 @@ async function callAndRespond(userText, attachedFiles) {
             tokens: totalTokens,
             cacheInfo: cacheInfo
         };
+        if (reasoning) assistantMsg.reasoning = reasoning;
         chat.messages.push(assistantMsg);
         saveChats();
         renderMessage(assistantMsg, chat.messages.length - 1);
@@ -1434,6 +1522,22 @@ function formatDateTime(date) {
     const h = String(date.getHours()).padStart(2, '0');
     const min = String(date.getMinutes()).padStart(2, '0');
     return `${y}-${m}-${d} ${h}:${min}`;
+}
+
+// ==================== 思考链 ====================
+function toggleThinking() {
+    thinkingEnabled = !thinkingEnabled;
+    const btn = document.getElementById('thinkingToggle');
+    btn.classList.toggle('active', thinkingEnabled);
+}
+
+function toggleThinkingContent(id) {
+    const toggle = document.querySelector(`[data-thinking-id="${id}"]`);
+    const content = document.getElementById('thinking-' + id);
+    if (toggle && content) {
+        toggle.classList.toggle('expanded');
+        content.classList.toggle('show');
+    }
 }
 
 // ==================== 对话内文件上传 ====================
